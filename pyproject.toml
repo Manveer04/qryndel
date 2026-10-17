@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qryndel"
+version = "0.1.0"
+description = "An experimental SQLite implementation of Unified Data Language"
+license = "MIT"
+authors = [{name = "Manveer Singh"}]
+keywords = ["query-language", "sqlite", "udl"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "lark>=1.1.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://github.com/Manveer04/qryndel"
+Repository = "https://github.com/Manveer04/qryndel"
+Issues = "https://github.com/Manveer04/qryndel/issues"
+
+[project.scripts]
+udl = "qryndel.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["qryndel*"]
+
+[tool.setuptools.package-data]
+qryndel = ["grammar.lark"]

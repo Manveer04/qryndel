@@ -1,0 +1,3 @@
+FROM users
+WHERE name = "Alice"
+RETURN email

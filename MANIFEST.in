@@ -1,0 +1,15 @@
+include AUTHORS.md
+include LICENSE
+include README.md
+include pyproject.toml
+recursive-include qryndel *.py *.lark
+recursive-include tests *.py
+prune qryndel.egg-info
+exclude qryndel.egg-info/*
+exclude qryndel.egg-info/SOURCES.txt
+recursive-exclude qryndel.egg-info *
+prune build
+prune dist
+prune .pytest_cache
+global-exclude *.py[cod]
+global-exclude __pycache__

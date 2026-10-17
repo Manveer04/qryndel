@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+title: Qryndel
+message: "If you use Qryndel, please cite this release."
+type: software
+abstract: "An implementation of Unified Data Language."
+version: 0.1.0
+authors:
+  - family-names: Singh
+    given-names: Manveer
+license: MIT
+repository-code: https://github.com/Manveer04/qryndel

@@ -1,0 +1,3 @@
+FROM users
+WHERE age >= 21
+RETURN name, age

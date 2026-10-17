@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest an improvement to Qryndel
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: What problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the API or UDL syntax you have in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility considerations
+      description: Explain any effect on existing syntax, semantics, or SQLite behavior.
