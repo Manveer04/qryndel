@@ -1,10 +1,8 @@
-"""SQLite backend registry for the v0.1.0 public release."""
+"""Backend registry. The v0.2.0 public release ships the SQLite backend only."""
 
 from __future__ import annotations
-from typing import Any
 
 from qryndel.backends.base import BackendCompiler
-from qryndel.logical_plan import PlanNode
 
 
 _BACKENDS: dict[str, type[BackendCompiler]] = {}
@@ -26,9 +24,9 @@ def get_backend(name: str) -> BackendCompiler:
     return _BACKENDS[name]()
 
 
-# Lazy imports to avoid circular dependencies at module level
 def _init_backends() -> None:
     from qryndel.backends.sqlite import SqliteBackend
+
     register_backend("sqlite", SqliteBackend)
 
 

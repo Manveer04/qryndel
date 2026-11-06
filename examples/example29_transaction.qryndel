@@ -1,0 +1,5 @@
+-- Both statements commit together, or neither does
+BEGIN
+UPDATE users SET city = "Jakarta" WHERE name = "Eve";
+DELETE FROM orders WHERE user_id = 5;
+COMMIT

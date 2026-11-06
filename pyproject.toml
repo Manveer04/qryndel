@@ -4,17 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qryndel"
-version = "0.1.0"
+version = "0.2.0"
 description = "An experimental SQLite implementation of Unified Data Language"
 license = "MIT"
 authors = [{name = "Manveer Singh"}]
-keywords = ["query-language", "sqlite", "udl"]
+keywords = ["query-language", "sqlite", "udl", "sql", "safe-sql"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
 ]
 readme = "README.md"
 requires-python = ">=3.10"

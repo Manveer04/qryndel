@@ -1,0 +1,3 @@
+RULE is_adult(x) = x.age >= 18
+RULE is_young(x) = NOT is_adult(x)
+FROM users AS u WHERE is_adult(u) RETURN name

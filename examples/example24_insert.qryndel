@@ -1,0 +1,6 @@
+INSERT INTO users {
+  name: "Hana",
+  age: 22,
+  email: "hana@example.com",
+  city: "Singapore"
+}

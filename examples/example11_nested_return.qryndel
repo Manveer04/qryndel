@@ -1,0 +1,2 @@
+FROM users
+RETURN name, profile.address.city, profile.address.country

@@ -1,27 +1,106 @@
-// Qryndel v0.1.0 public grammar
+// Qryndel v0.2.0 public grammar (Lark LALR)
+//
+// A program is optional TYPE and RULE declarations followed by exactly one
+// statement: a table query, a write statement, or a BEGIN ... COMMIT/ROLLBACK
+// transaction of write statements.
 
-start: query
+start: type_definition* rule_definition* (transaction | atomic_statement)
 
-query: from_clause where_clause? return_clause
+atomic_statement: query | insert_statement | update_statement | delete_statement
+
+transaction: "BEGIN" ";"? write_statement (";" write_statement)+ ";"? transaction_end
+write_statement: insert_statement | update_statement | delete_statement
+transaction_end: COMMIT | ROLLBACK
+COMMIT: "COMMIT"
+ROLLBACK: "ROLLBACK"
+
+// --- Language-level schemas ---
+type_definition: "TYPE" NAME "{" type_field* allow_extra? "}"
+type_field: NAME ":" type_name field_modifier? ","?
+type_name: NAME | NAME "<" NAME ">"
+field_modifier: REQUIRED | OPTIONAL
+allow_extra: "ALLOW" "extra" "fields"
+REQUIRED: "required"
+OPTIONAL: "optional"
+
+// --- Reusable predicates ---
+rule_definition: "RULE" NAME "(" NAME ")" "=" or_expr
+
+// --- Table queries ---
+query: from_clause join_clause* where_clause? return_clause group_clause? having_clause? order_clause? limit_clause?
+
 from_clause: "FROM" source_name alias?
 source_name: NAME
-alias: "AS" NAME
+alias: "AS"? NAME
+
+join_clause: join_type? "JOIN" source_name alias? "ON" join_condition
+join_type: INNER_SYMBOL | LEFT_SYMBOL | RIGHT_SYMBOL | FULL_SYMBOL
+join_condition: field operator field
 
 where_clause: "WHERE" or_expr
+
 or_expr: and_expr ("OR" and_expr)*
 and_expr: not_expr ("AND" not_expr)*
-not_expr: "NOT" primary -> negated | primary
-primary: condition | "(" or_expr ")"
-condition: field operator value
+not_expr: NOT_SYMBOL primary | primary
+primary: condition | rule_call | "(" or_expr ")"
+NOT_SYMBOL: "NOT"
+
+condition: condition_field operator value
          | field null_predicate
-field: NAME
+condition_field: field | aggregate
+
+rule_call: NAME "(" field ")"
+
+field: NAME ("." NAME)*
 operator: OP
-null_predicate: "IS" "NULL" -> is_null
-              | "IS" "NOT" "NULL" -> is_not_null
+
+null_predicate: "IS" "NULL"              -> is_null
+              | "IS" "NOT" "NULL"        -> is_not_null
+              | "IS" "MISSING"           -> is_missing
+              | "IS" "NOT" "MISSING"     -> is_not_missing
+              | "EXISTS"                 -> exists
+
 value: PARAM | NAME | NUMBER | STRING | SINGLE_STRING
 
-return_clause: "RETURN" field_list
-field_list: field ("," field)*
+return_clause: "RETURN" distinct? field_list
+distinct: "DISTINCT"
+field_list: return_item ("," return_item)*
+return_item: field | aggregate
+aggregate: AGG_FUNC "(" aggregate_arg ")"
+aggregate_arg: STAR | field
+AGG_FUNC.2: "COUNT" | "SUM" | "AVG" | "MIN" | "MAX"
+STAR: "*"
+
+group_clause: "GROUP" "BY" group_field_list
+group_field_list: field ("," field)*
+having_clause: "HAVING" or_expr
+
+order_clause: "ORDER" "BY" order_field ("," order_field)*
+order_field: (field | aggregate) direction? null_order?
+direction: ASC_SYMBOL | DESC_SYMBOL
+null_order: "NULLS" null_position
+null_position: FIRST_SYMBOL | LAST_SYMBOL
+FIRST_SYMBOL: "FIRST"
+LAST_SYMBOL: "LAST"
+ASC_SYMBOL: "ASC"
+DESC_SYMBOL: "DESC"
+
+limit_clause: "LIMIT" NUMBER
+
+INNER_SYMBOL: "INNER"
+LEFT_SYMBOL: "LEFT"
+RIGHT_SYMBOL: "RIGHT"
+FULL_SYMBOL: "FULL"
+
+// --- Write statements ---
+insert_statement: "INSERT" "INTO" NAME insert_values
+insert_values: "{" insert_pair ("," insert_pair)* "}"
+insert_pair: NAME ":" value
+
+update_statement: "UPDATE" NAME alias? "SET" assignment ("," assignment)* where_clause?
+assignment: field OP value
+
+delete_statement: "DELETE" "FROM" NAME alias? where_clause?
 
 OP: "=" | "!=" | ">" | "<" | ">=" | "<="
 NAME: /[a-zA-Z_][a-zA-Z0-9_]*/
@@ -29,6 +108,9 @@ PARAM: /\$[a-zA-Z_][a-zA-Z0-9_]*/
 STRING: /"[^"]*"/
 SINGLE_STRING: /'[^']*'/
 NUMBER: /-?\d+(\.\d+)?/
+
+COMMENT: /--[^\n]*/
+%ignore COMMENT
 
 %import common.WS
 %ignore WS

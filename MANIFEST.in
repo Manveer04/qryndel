@@ -1,15 +1,18 @@
 include AUTHORS.md
+include CHANGELOG.md
 include LICENSE
 include README.md
+include SECURITY.md
 include pyproject.toml
+include setup_db.py
 recursive-include qryndel *.py *.lark
 recursive-include tests *.py
-prune qryndel.egg-info
-exclude qryndel.egg-info/*
-exclude qryndel.egg-info/SOURCES.txt
-recursive-exclude qryndel.egg-info *
+recursive-include examples *.qryndel *.py
+recursive-include docs *.md
 prune build
 prune dist
 prune .pytest_cache
 global-exclude *.py[cod]
 global-exclude __pycache__
+global-exclude *.egg-info
+global-exclude test.db

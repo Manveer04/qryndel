@@ -1,0 +1,3 @@
+RULE is_adult(x) = x.age >= 18
+RULE can_drive(x) = is_adult(x) AND x.has_license = true
+FROM users AS u WHERE can_drive(u) RETURN name, age

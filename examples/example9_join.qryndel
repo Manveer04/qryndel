@@ -1,0 +1,4 @@
+FROM users
+JOIN orders ON users.id = orders.user_id
+RETURN users.name, orders.product, orders.amount, orders.quantity
+ORDER BY users.name, orders.amount DESC

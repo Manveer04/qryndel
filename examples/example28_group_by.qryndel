@@ -1,0 +1,6 @@
+-- Customers with at least two orders, biggest spenders first
+FROM orders
+RETURN user_id, COUNT(*), SUM(amount)
+GROUP BY user_id
+HAVING COUNT(*) >= 2
+ORDER BY SUM(amount) DESC

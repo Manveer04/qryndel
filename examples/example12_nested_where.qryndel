@@ -1,0 +1,3 @@
+FROM users
+WHERE profile.address.city = "Singapore"
+RETURN name, profile.address.city

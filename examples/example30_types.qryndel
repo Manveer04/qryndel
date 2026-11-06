@@ -1,0 +1,10 @@
+-- TYPE declarations turn on field checking for this program
+TYPE users {
+  id: ID required
+  name: Text required
+  age: Number
+  city: Text
+  ALLOW extra fields
+}
+
+FROM users WHERE age >= 18 RETURN name, city ORDER BY name

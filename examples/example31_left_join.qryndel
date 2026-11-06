@@ -1,0 +1,5 @@
+-- Users who have never placed an order
+FROM users AS u
+LEFT JOIN orders AS o ON u.id = o.user_id
+WHERE o.id IS NULL
+RETURN u.name

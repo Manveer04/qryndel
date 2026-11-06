@@ -1,0 +1,2 @@
+FROM users
+RETURN DISTINCT city

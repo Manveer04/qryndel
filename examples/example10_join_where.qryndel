@@ -1,0 +1,6 @@
+FROM users AS u
+JOIN orders AS o ON u.id = o.user_id
+WHERE o.amount > 50
+RETURN u.name, o.product, o.amount
+ORDER BY o.amount DESC
+LIMIT 5

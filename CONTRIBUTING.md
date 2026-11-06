@@ -19,7 +19,6 @@ should be discussed as an RFC before implementation.
 ```bash
 python -m venv .venv
 python -m pip install -e ".[test]"
-python setup_db.py
 python -m pytest -q
 ```
 

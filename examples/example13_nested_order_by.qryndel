@@ -1,0 +1,3 @@
+FROM users
+RETURN name, profile.address.city, profile.bio
+ORDER BY profile.bio ASC

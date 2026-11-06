@@ -2,7 +2,8 @@
 
 Qryndel is an experimental implementation of Unified Data Language (UDL), a
 small query language intended to separate how a query is written from how it
-is executed. The first public release focuses on a reliable SQLite path.
+is executed. Qryndel is SQLite-first: v0.2.0 covers reads, joins,
+aggregation, safe writes and transactions on SQLite.
 
 The project is early-stage and the language may change.
 
@@ -11,21 +12,30 @@ The project is early-stage and the language may change.
 Applications often couple query text directly to one database engine. UDL
 provides a compact, database-oriented syntax and a pipeline that parses it,
 checks its meaning, builds a logical plan, and compiles that plan to SQLite.
+Safety rules, such as "no `DELETE` without `WHERE`", are part of the
+language rather than left to code review.
 
 ## Example
 
 ```udl
-FROM users
-WHERE age >= $minimum AND (city = "Singapore" OR city = "Jakarta")
-RETURN name, age
+RULE is_adult(x) = x.age >= $minimum
+
+FROM users AS u
+JOIN orders AS o ON u.id = o.user_id
+WHERE is_adult(u) AND (u.city = "Singapore" OR u.city = "Jakarta")
+RETURN u.name, COUNT(*), SUM(o.amount)
+GROUP BY u.name
+HAVING COUNT(*) >= 2
+ORDER BY SUM(o.amount) DESC
+LIMIT 10
 ```
 
-The query uses named parameters rather than interpolating values into query
-text.
+Values are passed as named parameters (`$minimum`) and bound by SQLite. They
+are never concatenated into SQL text.
 
 ## Installation
 
-Qryndel v0.1.0 is distributed from the source repository. From a checkout:
+Qryndel is distributed from the source repository. From a checkout:
 
 ```bash
 python -m venv .venv
@@ -34,89 +44,123 @@ python -m pip install --upgrade pip
 python -m pip install .
 ```
 
-Python 3.10 or newer is required.
+Python 3.10 or newer is required. `RIGHT JOIN` and `FULL JOIN` need SQLite
+3.39 or newer, and `NULLS FIRST`/`NULLS LAST` need SQLite 3.30 or newer. On
+older SQLite versions Qryndel reports a clear capability error before running
+the query.
 
 ## Getting Started
 
-Create the reproducible example database and run the query through the CLI:
+Create the example database and run a query through the CLI:
 
 ```bash
 python setup_db.py
-udl "FROM users WHERE age >= $minimum RETURN name, age" --param '$minimum=18'
+udl "FROM users WHERE age >= $minimum RETURN name, age ORDER BY age DESC" --param '$minimum=18'
 ```
 
-The same query can be run through the Python API:
+The same query through the Python API:
 
 ```python
 from qryndel import Client
 
 client = Client("test.db")
 result = client.execute(
-    "FROM users WHERE age >= $minimum RETURN name, age",
+    "FROM users WHERE age >= $minimum RETURN name, age ORDER BY age DESC",
     params={"minimum": 18},
 )
-
 print(result.rows)
 ```
 
-The fixture created by `setup_db.py` contains `users` and `orders` tables.
+The fixture created by `setup_db.py` contains `users` (including JSON
+`profile` and `settings` columns) and `orders` tables. Runnable programs are
+in [`examples/`](examples).
 
-## Supported In v0.1.0
+## Writing Data
 
-- `FROM`, `WHERE`, and `RETURN` table queries.
-- `AND`, `OR`, `NOT`, parentheses, and comparison operators.
-- String, numeric, boolean, and `NULL` values where supported by SQLite.
-- Named query parameters such as `$minimum`.
-- Basic table aliases using `AS`.
-- SQLite compilation and execution with bound parameters.
-- Parser and semantic errors with source-aware messages.
-- A Python API and `udl` command-line entry point.
+```python
+client.execute(
+    "INSERT INTO users { name: $name, age: 22, email: $email, city: 'Singapore' }",
+    params={"name": "Hana", "email": "hana@example.com"},
+)
+client.execute("UPDATE users SET city = 'Jakarta' WHERE name = 'Hana'")
 
-The SQLite compiler also supports the basic `IS NULL` and `IS NOT NULL`
-predicates. The release intentionally does not promise portability to another
-database engine.
+# UPDATE or DELETE without WHERE is rejected before any SQL runs.
+client.execute("DELETE FROM users")  # raises SemanticError
+
+# Several writes commit together, or not at all.
+client.execute("""
+BEGIN
+UPDATE users SET city = "Jakarta" WHERE name = "Eve";
+DELETE FROM orders WHERE user_id = 5;
+COMMIT
+""")
+```
+
+Writes return `rows_affected` (and `last_insert_id` for `INSERT`) on the
+result.
+
+## Safety Controls
+
+| Control | Python API | CLI |
+| --- | --- | --- |
+| Reject all writes | `Client(path, read_only=True)` | `--read-only` |
+| Limit which tables writes touch | `Client(path, allowed_tables=["orders"])` | — |
+| Cap rows returned | `budget={"max_result_rows": 1000}` | `--max-rows N` |
+| Cap rows a write changes (rolls back) | `budget={"max_affected_rows": 10}` | `--max-affected-rows N` |
+| Time limit | `budget={"max_duration_ms": 500}` | `--timeout-ms MS` |
+| See the SQL without running it | `client.explain(query)` | `--explain` |
+| Count rows a write would change | `client.preview(query)` | `--preview` |
+
+`explain` output never includes parameter values. See
+[SECURITY.md](SECURITY.md) for the full security model.
+
+## Supported In v0.2.0
+
+- `FROM`, `WHERE`, `RETURN [DISTINCT]`, `ORDER BY ... [ASC|DESC] [NULLS FIRST|LAST]`, `LIMIT`.
+- `AND`, `OR`, `NOT`, parentheses, and `=`, `!=`, `>`, `<`, `>=`, `<=`.
+- `JOIN`, `INNER JOIN`, `LEFT JOIN`, `RIGHT JOIN`, `FULL JOIN` with aliases.
+- `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `GROUP BY`, `HAVING`.
+- Nested JSON fields (`profile.address.city`) and `IS [NOT] NULL`,
+  `IS [NOT] MISSING`, `EXISTS`.
+- `RULE` reusable predicates and `TYPE` schema declarations.
+- `INSERT`, `UPDATE`, `DELETE`, and `BEGIN ... COMMIT|ROLLBACK` transactions.
+- Named parameters (`$name`) and `--` line comments.
+- Source-aware parse errors and structured `UdlError` codes.
+- A Python API and the `udl` command-line tool.
+
+The full syntax is in the [language reference](docs/language-reference.md).
+Upgrading from 0.1.0? See the [changelog](CHANGELOG.md); existing 0.1.0
+queries and API calls keep working.
 
 ## Current Limitations
 
-This release does not support PostgreSQL, MongoDB, Neo4j, graph queries,
-aggregations, grouping, transactions, or data-modifying statements as public
-v0.1.0 features. Advanced implementation work remains in the private
-development codebase for later review.
-
-The public release is SQLite-first; it is not a claim that UDL can query any
-database today.
+PostgreSQL, MongoDB, Neo4j and graph `MATCH` queries are not part of v0.2.0.
+UDL does not yet promise that a query gives identical results on engines
+other than SQLite.
 
 ## Implementation Overview
 
-The core path is:
-
 ```text
-UDL text -> lexer/parser -> AST -> semantic validation -> logical plan -> SQLite SQL
+UDL text -> parser -> AST -> rule expansion + semantic validation
+         -> logical plan -> optimizer -> safety policy -> SQLite SQL -> executor
 ```
 
-Values are passed separately from generated SQL. The package does not build
-SQL by concatenating user-provided values.
+See [docs/architecture.md](docs/architecture.md).
 
 ## Development And Testing
 
-Install the development dependency and create the fixture before running the
-tests:
-
 ```bash
 python -m pip install -e ".[test]"
-python setup_db.py
 python -m pytest -q
 ```
 
-Tests use temporary SQLite databases where possible and do not require an
-external database service.
+The test suite creates its own SQLite fixtures and needs no external
+database service.
 
 ## Roadmap
 
-See [docs/ROADMAP.md](docs/ROADMAP.md). Future work may include richer
-expressions, aggregation, schema validation, safe mutations, transactions,
-additional adapters, diagnostics, and developer tooling. These are plans,
-not compatibility promises.
+See [docs/ROADMAP.md](docs/ROADMAP.md). These are plans, not compatibility
+promises.
 
 ## Contributing
 

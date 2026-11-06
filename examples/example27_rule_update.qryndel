@@ -1,0 +1,4 @@
+RULE is_inactive(x) = x.status = "inactive"
+
+DELETE FROM users AS u
+WHERE is_inactive(u)

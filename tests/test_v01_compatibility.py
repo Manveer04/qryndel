@@ -1,3 +1,5 @@
+"""v0.1.0 behaviour that v0.2.0 must keep working unchanged."""
+
 import sqlite3
 import subprocess
 import sys
@@ -32,10 +34,10 @@ def run(db, query, params=None):
 
 
 def test_version_and_only_public_backend():
-    assert __version__ == "0.1.0"
-    assert get_backend("sqlite").capabilities == frozenset(
-        {"from", "where", "return", "and", "or", "not", "parameters", "null_predicates"}
-    )
+    assert __version__ == "0.2.0"
+    capabilities = get_backend("sqlite").capabilities
+    assert capabilities.backend == "sqlite"
+    assert capabilities.select and capabilities.writes and capabilities.parameter_binding
     with pytest.raises(ValueError, match="Unknown backend"):
         get_backend("postgresql")
 
@@ -118,9 +120,8 @@ def test_semantic_validation_with_schema():
         "FROM users",
         "FROM users WHERE age ??? 18 RETURN name",
         "FROM users WHERE age = 18 RETURN",
-        "FROM users RETURN name ORDER BY age",
         "MATCH (u:User) RETURN u.name",
-        "INSERT INTO users {name: 'A'}",
+        "FROM users WHERE age = 18 RETURN name LIMIT -1",
     ],
 )
 def test_invalid_or_deferred_syntax_is_rejected(query):
@@ -157,4 +158,4 @@ def test_cli_operation(tmp_path):
 
 def test_cli_version():
     completed = subprocess.run([sys.executable, "-m", "qryndel.cli", "--version"], check=True, capture_output=True, text=True)
-    assert completed.stdout.strip() == "0.1.0"
+    assert completed.stdout.strip() == "0.2.0"
