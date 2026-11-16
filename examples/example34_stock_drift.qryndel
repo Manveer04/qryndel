@@ -1,0 +1,8 @@
+-- Inventory-style schema: listings whose marketplace stock differs from the
+-- master stock (needs products and platform_listings tables).
+FROM platform_listings AS l
+JOIN products AS p ON l.product_id = p.id
+WHERE l.current_stock != p.master_stock
+RETURN p.master_sku AS sku, l.platform, l.current_stock, p.master_stock,
+       l.current_stock - p.master_stock AS difference
+ORDER BY sku

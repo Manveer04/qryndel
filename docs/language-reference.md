@@ -1,12 +1,14 @@
-# UDL Language Reference (v0.2.0)
+# UDL Language Reference (v0.3.0)
 
 A UDL program is an optional list of `TYPE` declarations, then an optional
-list of `RULE` declarations, then exactly one statement. Keywords are
+list of `RULE` declarations, then one statement. A program with only
+declarations is allowed (it is used by `--check-schema`) but has nothing to
+run. Keywords are
 uppercase. Whitespace is free-form, and `--` starts a comment that runs to
 the end of the line.
 
 ```text
-program   := TYPE* RULE* statement
+program   := TYPE* RULE* [statement]
 statement := query | insert | update | delete | transaction
 ```
 
@@ -20,7 +22,71 @@ statement := query | insert | update | delete | transaction
 | `NULL` | Null. `x = NULL` means `x IS NULL`; `x != NULL` means `x IS NOT NULL` |
 | `$name` | A named parameter, bound at execution time |
 
-Every value, literal or parameter, is sent to SQLite as a bound parameter.
+`TRUE`, `FALSE` and `NULL` are not case-sensitive. Every value, literal or
+parameter, is sent to SQLite as a bound parameter, including values inside
+expressions.
+
+A `$parameter` whose value is `None` is compared as SQL `NULL`, so
+`x = $p` matches nothing (only a written `NULL` turns into `IS NULL`). This is
+deliberate: `WHERE owner_id = $user` with no user must not match every row
+that has no owner. Use `x IS NULL` to ask for nulls.
+
+A bare word is a column name: `WHERE city = town` compares two columns.
+Quote text values: `WHERE city = 'Singapore'`. (In `INSERT { city: Singapore }`
+a bare word is still stored as the string `'Singapore'`.)
+
+## Expressions
+
+Anywhere a value is expected (in `RETURN`, `WHERE`, `HAVING`, `ORDER BY`,
+inside an aggregate, and on the right of `UPDATE ... SET`) you can write an
+expression:
+
+```udl
+price * qty                     -- multiply
+SUM(fees) / SUM(gross) * 100    -- aggregates combine like numbers
+(master_stock + 2) * 3          -- parentheses
+-cost                           -- unary minus
+stock - $sold                   -- parameters
+```
+
+### Numbers stored as text
+
+CSV imports often store every column as TEXT. SQLite then compares text, so
+`price > 1000` is true for `'999.99'`. Convert explicitly:
+
+```udl
+FROM order_items WHERE NUMBER(price) > 1000 RETURN NUMBER(price) AS price ORDER BY price DESC
+```
+
+`NUMBER(x)` converts to a number (`'12.5'` becomes `12.5`) and `TEXT(x)` to
+text. Or declare the column once and every use in the program is converted:
+
+```udl
+TYPE order_items { price: Number  ALLOW extra fields }
+FROM order_items WHERE price > 1000 RETURN price
+```
+
+When Qryndel knows the schema (`schema="auto"`, the CLI default), comparing a
+TEXT column with a number is an error that suggests both fixes. Arithmetic
+(`price * qty`) already converts and is not affected.
+
+`*` and `/` bind tighter than `+` and `-`; operators of the same strength run
+left to right. `/` always divides as decimals: `7 / 2` is `3.5`, never `3`.
+Dividing by zero gives `NULL`. Arithmetic with `NULL` gives `NULL`.
+
+### Comparing columns
+
+Either side of a comparison can be a column or an expression:
+
+```udl
+FROM platform_listings AS l
+JOIN products AS p ON l.product_id = p.id
+WHERE l.current_stock != p.master_stock
+RETURN p.master_sku, l.current_stock - p.master_stock AS difference
+```
+
+As in SQL, a comparison involving `NULL` is never true, so rows where either
+column is `NULL` are not returned by `!=`. Use `IS NULL` to find them.
 
 ## Fields
 
@@ -32,9 +98,18 @@ Every value, literal or parameter, is sent to SQLite as a bound parameter.
 
 Identifiers must match `[A-Za-z_][A-Za-z0-9_]*`.
 
-A qualified field appears in results under its dotted name, for example
-`{"u.name": "Alice"}`. Aggregates appear under their text, such as
-`"COUNT(*)"`.
+## Result column names
+
+| `RETURN` item | Key in each result row |
+| --- | --- |
+| `name` | `"name"` |
+| `u.name` | `"u.name"` |
+| `COUNT(*)` | `"COUNT(*)"` |
+| `qty * price` | `"qty * price"` (the expression's text) |
+| `qty * price AS total` | `"total"` |
+
+Two items with the same name are an error, because one would overwrite the
+other in the result row. Rename one with `AS`.
 
 ## Queries
 
@@ -49,16 +124,18 @@ RETURN [DISTINCT] item, ...
 [LIMIT n]
 ```
 
-`AS` is optional before an alias. `JOIN` on its own means `INNER JOIN`.
-`RETURN` items are fields or aggregates: `COUNT(*)`, `COUNT(f)`, `SUM(f)`,
-`AVG(f)`, `MIN(f)`, `MAX(f)`. `HAVING` needs `GROUP BY` or an aggregate in
-`RETURN`, and is the only place an aggregate may appear in a condition.
-`LIMIT` takes a non-negative integer.
+`AS` is optional before a table alias; in `RETURN` it is required
+(`RETURN qty * price AS total`). `JOIN` on its own means `INNER JOIN`.
+`RETURN` items are expressions, which may use aggregates: `COUNT(*)`,
+`COUNT(e)`, `SUM(e)`, `AVG(e)`, `MIN(e)`, `MAX(e)`. Only `COUNT` accepts `*`,
+and aggregates cannot be nested. `HAVING` needs `GROUP BY` or an aggregate in
+`RETURN`, and is the only condition where an aggregate may appear. `ORDER BY`
+may use a `RETURN` alias. `LIMIT` takes a non-negative integer.
 
 ### Conditions
 
 ```udl
-field op value                 -- op is one of = != > < >= <=
+expr op expr                   -- op is one of = != > < >= <=
 field IS NULL | IS NOT NULL
 field IS MISSING | IS NOT MISSING | EXISTS
 rule_name(alias)
@@ -107,18 +184,35 @@ or the `Client` was given a `schema`, fields are checked:
 - `ALLOW extra fields` lets `INSERT` set undeclared fields.
 
 A `TYPE` declaration replaces a `schema` entry with the same name. Type
-names such as `Text` and `Number` are recorded but not enforced yet.
+names such as `Text` and `Number` are not enforced on values yet, but
+`--check-schema` / `Client.check_schema()` compares them with the real
+table: `Number` matches INTEGER/REAL columns, `Text` matches TEXT, `Boolean`
+matches BOOLEAN, `List<...>` matches TEXT, and `ID` matches any type.
+
+### Checking against the real database
+
+`Client(path, schema="auto")` (the CLI does this by default) reads every
+table and column from the database before validating. Unknown tables and
+columns are reported with a suggestion, for example
+`Unknown field 'platfrom' in source 'orders'. Did you mean 'platform'?`.
+Paths inside TEXT/JSON columns (`profile.address.city`) are allowed, because
+their contents can't be known in advance.
 
 ## Writes
 
 ```udl
 INSERT INTO users { name: "Hana", age: 22, email: $email }
 UPDATE users [AS u] SET age = 23, city = "Jakarta" WHERE name = "Hana"
+UPDATE products SET master_stock = master_stock - $sold WHERE id = $id
 DELETE FROM users [AS u] WHERE name = "Hana"
 ```
 
-`UPDATE` and `DELETE` must have a `WHERE` clause. Each write runs in its own
-transaction.
+`UPDATE` and `DELETE` must have a `WHERE` clause, and it must be able to be
+false: `WHERE 1 = 1`, `WHERE price = price`, `WHERE x IS NULL OR x IS NOT NULL`
+and `WHERE p OR NOT p` are rejected because they would change every row. This
+catches common mistakes, not every possible tautology; use the
+`max_affected_rows` budget as the real limit. Each write runs in its own
+transaction, started with `BEGIN IMMEDIATE`.
 
 ## Transactions
 
@@ -147,3 +241,12 @@ Every error is a `qryndel.UdlError` with a stable `code` and `to_dict()`:
 | `UDL_SAFETY_BLOCKED` | A write is blocked by `read_only` or `allowed_tables` |
 | `UDL_BUDGET_EXCEEDED` | A row, size, affected-row, or time budget was exceeded |
 | `UDL_EXECUTION_ERROR` | SQLite reported an error, or the database file does not exist |
+| `UDL_CONTRACT_VIOLATION` | A result failed a contract passed to `execute(contracts=...)` |
+| `UDL_DATABASE_LOCKED` | Another connection held the lock longer than `busy_timeout_ms` / `max_duration_ms` |
+
+## Limits
+
+Queries may nest up to 200 levels deep (each operator or condition is a
+level; parentheses alone do not count). Long `AND`/`OR` chains are fine: a
+5,000-term `OR` is stored as a balanced tree. Integer parameters must fit in
+64 bits; larger integer literals become decimals.

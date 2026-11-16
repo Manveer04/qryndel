@@ -24,6 +24,7 @@ from qryndel.logical_plan import (
     TransactionPlan,
 )
 from qryndel.errors import UdlError
+from qryndel.expressions import is_computed, iter_aggregates, iter_fields
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,8 @@ class Capabilities:
     parameter_binding: bool = False
     native_execution: bool = False
     null_ordering: bool = False
+    computed_expressions: bool = False
+    column_comparison: bool = False
 
     def supports(self, feature: str) -> bool:
         if feature.startswith("aggregate:"):
@@ -72,15 +75,24 @@ def required_capabilities(plan: PlanNode) -> Set[str]:
     required: Set[str] = {"select"}
 
     def walk(node: PlanNode) -> None:
-        def inspect_field(field: object) -> None:
-            if isinstance(field, FieldPath) and len(field.parts) >= 3:
-                required.add("nested_paths")
-            if isinstance(field, AggregateField) and field.field is not None:
-                inspect_field(field.field)
+        def inspect_field(expression: object) -> None:
+            """Record what a value expression needs (any expression, not just fields)."""
+            for field in iter_fields(expression):
+                if len(field.parts) >= 3:
+                    required.add("nested_paths")
+            for aggregate in iter_aggregates(expression):
+                required.add(f"aggregate:{aggregate.function}")
+            if is_computed(expression):
+                required.add("computed_expressions")
 
         def inspect_expression(expression: object) -> None:
             if isinstance(expression, Condition):
                 inspect_field(expression.field)
+                inspect_field(expression.value)
+                if next(iter_fields(expression.field), None) is not None and next(
+                    iter_fields(expression.value), None
+                ) is not None:
+                    required.add("column_comparison")
             elif isinstance(expression, NullPredicate):
                 inspect_field(expression.field)
             elif isinstance(expression, (AndCondition, OrCondition)):
@@ -97,9 +109,15 @@ def required_capabilities(plan: PlanNode) -> Set[str]:
         if isinstance(node, TransactionPlan):
             required.add("transactions")
             required.add("writes")
+            for statement in node.statements:
+                walk(statement)
             return
         if node.__class__.__name__ in {"InsertPlan", "UpdatePlan", "DeletePlan"}:
             required.add("writes")
+            for assignment in getattr(node, "assignments", ()) or ():
+                inspect_field(assignment.value)
+            if getattr(node, "condition", None) is not None:
+                inspect_expression(node.condition)
         if isinstance(node, GroupBy):
             required.add("group_by")
             for field in node.fields:
@@ -109,8 +127,6 @@ def required_capabilities(plan: PlanNode) -> Set[str]:
             inspect_expression(node.predicate)
         if isinstance(node, Project):
             for column in node.columns:
-                if isinstance(column, AggregateField):
-                    required.add(f"aggregate:{column.function}")
                 inspect_field(column)
         if isinstance(node, Filter):
             inspect_expression(node.predicate)
@@ -118,11 +134,7 @@ def required_capabilities(plan: PlanNode) -> Set[str]:
             for order_field in node.order_fields:
                 if order_field.nulls:
                     required.add("null_ordering")
-                if isinstance(order_field.field, AggregateField):
-                    if order_field.field.field is not None:
-                        inspect_field(order_field.field.field)
-                else:
-                    inspect_field(order_field.field)
+                inspect_field(order_field.field)
         if hasattr(node, "child"):
             walk(node.child)
 

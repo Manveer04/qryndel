@@ -17,6 +17,7 @@ from qryndel.ast_nodes import (
     OrCondition,
     WhereExpr,
 )
+from qryndel.expressions import iter_fields
 from qryndel.logical_plan import Filter, Join, PlanNode, Scan
 
 
@@ -33,10 +34,11 @@ def _tables(node: PlanNode) -> Set[str]:
 def _references(expr: WhereExpr) -> Optional[Set[str]]:
     """Return referenced qualifiers, or None when a predicate is unqualified."""
     if isinstance(expr, Condition):
-        field = expr.field
-        if not isinstance(field, FieldPath) or field.qualifier is None:
+        # Every column on both sides counts: l.stock != p.stock touches l AND p.
+        fields = list(iter_fields(expr.field)) + list(iter_fields(expr.value))
+        if not fields or any(field.qualifier is None for field in fields):
             return None
-        return {field.qualifier}
+        return {field.qualifier for field in fields}
     if isinstance(expr, (AndCondition, OrCondition)):
         left = _references(expr.left)
         right = _references(expr.right)

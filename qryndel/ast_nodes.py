@@ -1,4 +1,9 @@
-"""Abstract syntax tree nodes for the Qryndel v0.2.0 language."""
+"""Abstract syntax tree nodes for the Qryndel v0.3.0 language.
+
+Value expressions (``Expr``) are built from literals (plain Python values:
+int, float, str, bool, None), ``ParameterRef``, ``FieldPath``,
+``AggregateField``, ``BinaryOp`` and ``Negate``.
+"""
 
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -32,6 +37,10 @@ class FieldPath:
     """
     parts: List[str]
     qualifier: Optional[str] = None
+    # Set during validation: the real table the column belongs to, and a
+    # conversion to apply (``"NUMERIC"`` when a TYPE declares it a Number).
+    table: Optional[str] = field(default=None, compare=False)
+    cast: Optional[str] = field(default=None, compare=False)
 
     @property
     def name(self) -> str:
@@ -47,9 +56,12 @@ class FieldPath:
 
 @dataclass(frozen=True)
 class AggregateField:
-    """An aggregate projection such as ``COUNT(*)`` or ``SUM(amount)``."""
+    """An aggregate such as ``COUNT(*)``, ``SUM(amount)`` or ``SUM(qty * cost)``.
+
+    ``field`` is the argument expression, or ``None`` for ``COUNT(*)``.
+    """
     function: str
-    field: Optional[FieldPath] = None
+    field: Optional["Expr"] = None
 
     def __repr__(self) -> str:
         argument = "*" if self.field is None else self.field
@@ -72,8 +84,12 @@ class HavingClause:
 
 @dataclass
 class Condition:
-    """A binary comparison: field op value."""
-    field: Union[FieldPath, AggregateField]
+    """A comparison: ``field op value``.
+
+    ``field`` is the left expression and ``value`` the right one. Either may
+    be a column, so ``l.current_stock != p.master_stock`` is a Condition.
+    """
+    field: Any
     operator: str
     value: Any
 
@@ -98,6 +114,54 @@ class ParameterRef:
 
     def __repr__(self) -> str:
         return f"ParameterRef(${self.name})"
+
+
+@dataclass
+class BinaryOp:
+    """Arithmetic: ``left op right`` where op is ``+``, ``-``, ``*`` or ``/``."""
+    op: str
+    left: "Expr"
+    right: "Expr"
+
+    def __repr__(self) -> str:
+        return f"({self.left!r} {self.op} {self.right!r})"
+
+
+@dataclass
+class Negate:
+    """Unary minus: ``-operand``."""
+    operand: "Expr"
+
+    def __repr__(self) -> str:
+        return f"(-{self.operand!r})"
+
+
+@dataclass
+class Convert:
+    """``NUMBER(expr)`` or ``TEXT(expr)``: an explicit type conversion."""
+    target: str  # "NUMBER" or "TEXT"
+    operand: "Expr"
+
+    def __repr__(self) -> str:
+        return f"{self.target}({self.operand!r})"
+
+
+Expr = Union[FieldPath, AggregateField, ParameterRef, BinaryOp, Negate, Convert, int, float, str, bool, None]
+
+
+@dataclass
+class ProjectionItem:
+    """A RETURN item that is computed or renamed: ``expr [AS alias]``.
+
+    Plain fields and aggregates without ``AS`` stay ``FieldPath`` /
+    ``AggregateField`` for backward compatibility.
+    """
+    expression: Expr
+    alias: Optional[str] = None
+
+    def __repr__(self) -> str:
+        suffix = f" AS {self.alias}" if self.alias else ""
+        return f"ProjectionItem({self.expression!r}{suffix})"
 
 
 @dataclass
@@ -159,8 +223,8 @@ WhereExpr = Union[
 
 @dataclass
 class OrderField:
-    """A single field in an ORDER BY clause with optional direction."""
-    field: FieldPath
+    """A single ORDER BY item (field, aggregate, expression or alias)."""
+    field: Any
     direction: str = "ASC"
     nulls: Optional[str] = None
 
@@ -205,7 +269,7 @@ class Join:
 class Query:
     """Top-level AST node for a complete Qryndel FROM query."""
     source: Source
-    fields: List[Union[FieldPath, AggregateField]]
+    fields: List[Union[FieldPath, AggregateField, ProjectionItem]]
     where: Optional[WhereExpr] = None
     order: Optional[List[OrderField]] = None
     limit: Optional[int] = None
@@ -263,7 +327,7 @@ class RuleDefinition:
 
 @dataclass
 class Assignment:
-    """A single field = value assignment (for UPDATE)."""
+    """A single ``field = expression`` assignment (for UPDATE)."""
     field: FieldPath
     value: Any
 
@@ -326,7 +390,7 @@ class Program:
     """A complete program: optional TYPE/RULE declarations and one statement."""
     types: List[TypeDefinition]
     rules: List[RuleDefinition]
-    statement: Statement
+    statement: Optional[Statement]
 
     @property
     def query(self) -> Query:

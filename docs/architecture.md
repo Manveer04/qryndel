@@ -2,10 +2,14 @@
 
 ```text
 UDL source
-  -> parser.py        Lark LALR grammar (grammar.lark) -> AST (ast_nodes.py)
-  -> semantic.py      merge TYPE declarations into the schema, expand RULEs
-                      (rules.py), resolve and check field references, reject
-                      UPDATE/DELETE without WHERE
+  -> parser.py        Lark LALR grammar (grammar.lark) -> AST (ast_nodes.py),
+                      built inside the parser without recursion; AND/OR
+                      chains balanced; nesting capped at 200 levels
+  -> semantic.py      merge TYPE declarations into the schema (or a schema
+                      loaded from the database by schema.py), expand RULEs
+                      (rules.py), resolve and check every field in every
+                      expression (expressions.py), check aggregate placement
+                      and result names, reject UPDATE/DELETE without WHERE
   -> logical_plan.py  Scan, Join, Filter, GroupBy, Having, Distinct, Sort,
                       Project, Limit / InsertPlan, UpdatePlan, DeletePlan,
                       TransactionPlan
@@ -15,10 +19,15 @@ UDL source
                       (or the installed SQLite version) does not declare
   -> safety.py        read_only / allowed_tables / require WHERE policy
   -> backends/sqlite.py  SQL with ? placeholders plus a params list
-  -> executor.py      run on SQLite: explicit transactions for writes,
+  -> executor.py      run on SQLite: writes in BEGIN IMMEDIATE transactions,
                       rollback on error or budget overrun, row/byte/time
-                      budgets for reads
+                      budgets checked while fetching, lock waits bounded
+                      by busy_timeout_ms and max_duration_ms
+  -> contracts.py     optional checks on the returned rows
 ```
+
+`schema_drift.py` sits beside the pipeline: it compares `TYPE` declarations
+with the real tables and only reports.
 
 `sdk.Client` connects these steps. `cli.py` is a thin wrapper around the
 client.
@@ -42,11 +51,14 @@ client.
 
 | Module | Responsibility |
 | --- | --- |
-| `grammar.lark`, `parser.py`, `ast_nodes.py` | Syntax |
-| `rules.py`, `semantic.py` | Meaning |
+| `grammar.lark`, `parser.py`, `ast_nodes.py`, `expressions.py` | Syntax and expression helpers |
+| `rules.py`, `semantic.py`, `schema.py` | Meaning, schema loading |
 | `logical_plan.py`, `optimizer.py` | Planning |
 | `capabilities.py`, `backends/` | Backend contract and SQLite compiler |
 | `safety.py`, `budgets.py` | Mutation policy, previews, limits |
 | `executor.py`, `metrics.py` | Execution |
-| `explain.py`, `errors.py` | Diagnostics |
+| `explain.py`, `errors.py`, `schema_drift.py` | Diagnostics |
+| `contracts.py` | Result checks |
+
+See [real-world-testing.md](real-world-testing.md) for how the pipeline was tested at scale.
 | `sdk.py`, `cli.py` | Public entry points |

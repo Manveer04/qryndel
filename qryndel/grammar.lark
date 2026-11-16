@@ -1,10 +1,11 @@
-// Qryndel v0.2.0 public grammar (Lark LALR)
+// Qryndel v0.3.0 public grammar (Lark LALR)
 //
-// A program is optional TYPE and RULE declarations followed by exactly one
+// A program is optional TYPE and RULE declarations followed by at most one
 // statement: a table query, a write statement, or a BEGIN ... COMMIT/ROLLBACK
-// transaction of write statements.
+// transaction of write statements. A program with only declarations is valid
+// (used for schema-drift checks) but has nothing to execute.
 
-start: type_definition* rule_definition* (transaction | atomic_statement)
+start: type_definition* rule_definition* (transaction | atomic_statement)?
 
 atomic_statement: query | insert_statement | update_statement | delete_statement
 
@@ -45,38 +46,60 @@ not_expr: NOT_SYMBOL primary | primary
 primary: condition | rule_call | "(" or_expr ")"
 NOT_SYMBOL: "NOT"
 
-condition: condition_field operator value
+// Either side of a comparison may be a column, a literal, a parameter, an
+// aggregate, or an arithmetic expression over those.
+condition: expr operator expr
          | field null_predicate
-condition_field: field | aggregate
 
 rule_call: NAME "(" field ")"
 
 field: NAME ("." NAME)*
 operator: OP
 
-null_predicate: "IS" "NULL"              -> is_null
-              | "IS" "NOT" "NULL"        -> is_not_null
-              | "IS" "MISSING"           -> is_missing
-              | "IS" "NOT" "MISSING"     -> is_not_missing
-              | "EXISTS"                 -> exists
+null_predicate: "IS" NULL_KW              -> is_null
+              | "IS" "NOT" NULL_KW        -> is_not_null
+              | "IS" "MISSING"            -> is_missing
+              | "IS" "NOT" "MISSING"      -> is_not_missing
+              | "EXISTS"                  -> exists
 
-value: PARAM | NAME | NUMBER | STRING | SINGLE_STRING
+// --- Arithmetic expressions ---
+expr: term (add_op term)*
+term: unary (mul_op unary)*
+unary: "-" unary                          -> negate
+     | atom
+atom: field
+    | aggregate
+    | conversion
+    | literal
+    | PARAM                               -> parameter
+    | "(" expr ")"
+add_op: "+" -> plus
+      | "-" -> minus
+mul_op: "*" -> times
+      | "/" -> divide
 
+literal: NUMBER | STRING | SINGLE_STRING | BOOL_KW | NULL_KW
+
+// NUMBER(x) / TEXT(x): explicit conversions, e.g. for numbers stored as text.
+conversion: CONVERT_FUNC "(" expr ")"
+CONVERT_FUNC.2: "NUMBER" | "TEXT"
+
+// --- RETURN ---
 return_clause: "RETURN" distinct? field_list
 distinct: "DISTINCT"
 field_list: return_item ("," return_item)*
-return_item: field | aggregate
+return_item: expr ("AS" NAME)?
 aggregate: AGG_FUNC "(" aggregate_arg ")"
-aggregate_arg: STAR | field
+aggregate_arg: "*"                        -> agg_star
+             | expr
 AGG_FUNC.2: "COUNT" | "SUM" | "AVG" | "MIN" | "MAX"
-STAR: "*"
 
 group_clause: "GROUP" "BY" group_field_list
 group_field_list: field ("," field)*
 having_clause: "HAVING" or_expr
 
 order_clause: "ORDER" "BY" order_field ("," order_field)*
-order_field: (field | aggregate) direction? null_order?
+order_field: expr direction? null_order?
 direction: ASC_SYMBOL | DESC_SYMBOL
 null_order: "NULLS" null_position
 null_position: FIRST_SYMBOL | LAST_SYMBOL
@@ -93,21 +116,29 @@ RIGHT_SYMBOL: "RIGHT"
 FULL_SYMBOL: "FULL"
 
 // --- Write statements ---
+// INSERT takes plain values (no column references). UPDATE ... SET may use
+// expressions, e.g. SET stock = stock - 1.
 insert_statement: "INSERT" "INTO" NAME insert_values
 insert_values: "{" insert_pair ("," insert_pair)* "}"
-insert_pair: NAME ":" value
+insert_pair: NAME ":" insert_value
+insert_value: literal
+            | PARAM                       -> parameter
+            | "-" NUMBER                  -> negative_number
+            | NAME                        -> bare_word
 
 update_statement: "UPDATE" NAME alias? "SET" assignment ("," assignment)* where_clause?
-assignment: field OP value
+assignment: field OP expr
 
 delete_statement: "DELETE" "FROM" NAME alias? where_clause?
 
-OP: "=" | "!=" | ">" | "<" | ">=" | "<="
+OP: "=" | "!=" | ">=" | "<=" | ">" | "<"
+BOOL_KW.3: /(?i:true|false)\b/
+NULL_KW.3: /(?i:null)\b/
 NAME: /[a-zA-Z_][a-zA-Z0-9_]*/
 PARAM: /\$[a-zA-Z_][a-zA-Z0-9_]*/
 STRING: /"[^"]*"/
 SINGLE_STRING: /'[^']*'/
-NUMBER: /-?\d+(\.\d+)?/
+NUMBER: /\d+(\.\d+)?/
 
 COMMENT: /--[^\n]*/
 %ignore COMMENT

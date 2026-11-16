@@ -1,0 +1,2 @@
+-- Expressions in UPDATE: take sold units off the stock count
+UPDATE orders SET quantity = quantity - $sold WHERE id = $order_id

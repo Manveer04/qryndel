@@ -12,7 +12,7 @@ class ExecutionMetrics:
     elapsed_ms: float
     rows_returned: int = 0
     rows_affected: int = 0
-    result_bytes: int = 0
+    result_bytes: int | None = None  # measured only under a max_result_bytes budget
     budget_applied: bool = False
     budget_exceeded: bool = False
     result_complete: bool = True

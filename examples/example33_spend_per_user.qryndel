@@ -1,0 +1,10 @@
+-- Spend per customer, with the average order value worked out per row
+FROM users AS u
+JOIN orders AS o ON u.id = o.user_id
+RETURN u.name AS customer,
+       COUNT(*) AS orders,
+       SUM(o.amount * o.quantity) AS spent,
+       SUM(o.amount * o.quantity) / COUNT(*) AS avg_order
+GROUP BY u.name
+HAVING SUM(o.amount * o.quantity) > 100
+ORDER BY spent DESC

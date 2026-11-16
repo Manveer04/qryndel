@@ -1,4 +1,4 @@
-"""Lexer and parser for the Qryndel v0.2.0 grammar (Lark LALR)."""
+"""Lexer and parser for the Qryndel v0.3.0 grammar (Lark LALR)."""
 
 from __future__ import annotations
 from pathlib import Path
@@ -11,6 +11,8 @@ from qryndel.ast_nodes import (
     AndCondition,
     AggregateField,
     Assignment,
+    BinaryOp,
+    Convert,
     Condition,
     DeleteStatement,
     FieldPath,
@@ -19,12 +21,14 @@ from qryndel.ast_nodes import (
     InsertStatement,
     Join,
     JoinCondition,
+    Negate,
     NotCondition,
     NullPredicate,
     OrderField,
     OrCondition,
     ParameterRef,
     Program,
+    ProjectionItem,
     Query,
     Statement,
     RuleCall,
@@ -39,15 +43,52 @@ from qryndel.ast_nodes import (
 _GRAMMAR_PATH = Path(__file__).parent / "grammar.lark"
 _GRAMMAR = _GRAMMAR_PATH.read_text(encoding="utf-8")
 
-# Reusable parser instance
+# Reusable parser instance. The transformer runs *inside* the LALR parser
+# (bottom-up, no recursion), so deeply nested input cannot overflow Python's
+# call stack while building the AST.
 _lark_parser: Lark | None = None
+
+#: Deepest AST nesting accepted. Deeper input is almost certainly generated
+#: by mistake and would exhaust the call stack in later stages.
+MAX_NESTING_DEPTH = 200
+
+_SQLITE_INT_MIN = -(2**63)
+_SQLITE_INT_MAX = 2**63 - 1
 
 
 def _get_parser() -> Lark:
     global _lark_parser
     if _lark_parser is None:
-        _lark_parser = Lark(_GRAMMAR, parser="lalr")
+        _lark_parser = Lark(_GRAMMAR, parser="lalr", transformer=_QryndelTransformer())
     return _lark_parser
+
+
+def _balanced(nodes: list, node_type):
+    """Combine an AND/OR chain into a balanced tree (depth log2(n), not n)."""
+    while len(nodes) > 1:
+        paired = [node_type(left=nodes[i], right=nodes[i + 1]) for i in range(0, len(nodes) - 1, 2)]
+        if len(nodes) % 2:
+            paired.append(nodes[-1])
+        nodes = paired
+    return nodes[0]
+
+
+def _check_depth(root) -> None:
+    """Reject ASTs nested deeper than MAX_NESTING_DEPTH, without recursion."""
+    stack = [(root, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > MAX_NESTING_DEPTH:
+            raise ParseError(
+                f"Query is nested too deeply (more than {MAX_NESTING_DEPTH} levels). "
+                "Split it up, or use a shorter chain of operators."
+            )
+        if isinstance(node, (list, tuple)):
+            stack.extend((item, depth) for item in node)
+        elif isinstance(node, dict):
+            stack.extend((item, depth) for item in node.values())
+        elif hasattr(node, "__dataclass_fields__"):
+            stack.extend((getattr(node, name), depth + 1) for name in node.__dataclass_fields__)
 
 
 class ParseError(UdlError):
@@ -59,6 +100,9 @@ class ParseError(UdlError):
         super().__init__(message, code=self.code, source_span=source_span)
 
 
+_STAR = object()  # marker for COUNT(*)
+
+
 class _QryndelTransformer(Transformer):
     """Converts Lark parse tree into custom AST nodes."""
 
@@ -67,7 +111,7 @@ class _QryndelTransformer(Transformer):
     def start(self, children):
         types = [c for c in children if isinstance(c, TypeDefinition)]
         rules = [c for c in children if isinstance(c, RuleDefinition)]
-        stmt = [c for c in children if isinstance(
+        statements = [c for c in children if isinstance(
             c, (
                 Query,
                 InsertStatement,
@@ -75,7 +119,8 @@ class _QryndelTransformer(Transformer):
                 DeleteStatement,
                 TransactionStatement,
             )
-        )][0]
+        )]
+        stmt = statements[0] if statements else None
         return Program(types=types, rules=rules, statement=stmt)
 
     def atomic_statement(self, children):
@@ -219,20 +264,10 @@ class _QryndelTransformer(Transformer):
         return children[0]
 
     def or_expr(self, children):
-        if len(children) == 1:
-            return children[0]
-        result = children[0]
-        for child in children[1:]:
-            result = OrCondition(left=result, right=child)
-        return result
+        return _balanced(list(children), OrCondition)
 
     def and_expr(self, children):
-        if len(children) == 1:
-            return children[0]
-        result = children[0]
-        for child in children[1:]:
-            result = AndCondition(left=result, right=child)
-        return result
+        return _balanced(list(children), AndCondition)
 
     def not_expr(self, children):
         if len(children) == 1:
@@ -266,9 +301,6 @@ class _QryndelTransformer(Transformer):
     def exists(self, _children):
         return "EXISTS"
 
-    def condition_field(self, children):
-        return children[0]
-
     def rule_call(self, children):
         name = str(children[0])
         arg = children[1]
@@ -281,25 +313,76 @@ class _QryndelTransformer(Transformer):
     def operator(self, children):
         return str(children[0])
 
-    def value(self, children):
-        raw = str(children[0])
-        if raw.startswith("$"):
-            return ParameterRef(name=raw[1:])
-        if raw.lower() in ("true", "false"):
+    # --- Values and arithmetic ---
+
+    def literal(self, children):
+        token = children[0]
+        raw = str(token)
+        kind = token.type
+        if kind == "BOOL_KW":
             return raw.lower() == "true"
-        if raw.lower() == "null":
+        if kind == "NULL_KW":
             return None
-        try:
+        if kind == "NUMBER":
             if "." in raw:
                 return float(raw)
-            return int(raw)
-        except ValueError:
-            pass
-        if raw.startswith('"') and raw.endswith('"'):
-            return raw[1:-1]
-        if raw.startswith("'") and raw.endswith("'"):
-            return raw[1:-1]
-        return raw
+            value = int(raw)
+            # Like SQLite, integers too large for 64 bits become decimals.
+            return value if value <= _SQLITE_INT_MAX else float(raw)
+        return raw[1:-1]  # STRING / SINGLE_STRING
+
+    def parameter(self, children):
+        return ParameterRef(name=str(children[0])[1:])
+
+    def negative_number(self, children):
+        raw = str(children[0])
+        return -(float(raw) if "." in raw else int(raw))
+
+    def bare_word(self, children):
+        # INSERT { city: Singapore } keeps the v0.1 meaning: the string 'Singapore'.
+        return str(children[0])
+
+    def insert_value(self, children):
+        return children[0]
+
+    def atom(self, children):
+        return children[0]
+
+    def unary(self, children):
+        return children[0]
+
+    def conversion(self, children):
+        return Convert(target=str(children[0]).upper(), operand=children[1])
+
+    def negate(self, children):
+        operand = children[0]
+        if isinstance(operand, (int, float)) and not isinstance(operand, bool):
+            return -operand  # fold "-5" into a literal
+        return Negate(operand=operand)
+
+    def plus(self, _children):
+        return "+"
+
+    def minus(self, _children):
+        return "-"
+
+    def times(self, _children):
+        return "*"
+
+    def divide(self, _children):
+        return "/"
+
+    def _fold(self, children):
+        result = children[0]
+        for index in range(1, len(children), 2):
+            result = BinaryOp(op=children[index], left=result, right=children[index + 1])
+        return result
+
+    def expr(self, children):
+        return self._fold(children)
+
+    def term(self, children):
+        return self._fold(children)
 
     # --- RETURN ---
 
@@ -329,16 +412,25 @@ class _QryndelTransformer(Transformer):
         return HavingClause(expression=children[0])
 
     def return_item(self, children):
-        return children[0]
+        expression = children[0]
+        alias = str(children[1]) if len(children) > 1 else None
+        if alias is None and isinstance(expression, (FieldPath, AggregateField)):
+            return expression
+        return ProjectionItem(expression=expression, alias=alias)
 
     def aggregate(self, children):
         function = str(children[0]).upper()
         argument = children[1]
-        return AggregateField(function=function, field=None if argument == "*" else argument)
+        if argument is _STAR:
+            if function != "COUNT":
+                raise ParseError(f"{function}(*) is not valid; only COUNT(*) accepts *")
+            return AggregateField(function=function, field=None)
+        return AggregateField(function=function, field=argument)
+
+    def agg_star(self, _children):
+        return _STAR
 
     def aggregate_arg(self, children):
-        if not children:
-            return "*"
         return children[0]
 
     # --- ORDER BY ---
@@ -446,30 +538,32 @@ def parse_program(text: str) -> Program:
     """
     Parse a Qryndel program string into a ``Program`` AST.
 
-    A program may contain TYPE and RULE declarations followed by one
-    statement.
+    A program may contain TYPE and RULE declarations followed by at most
+    one statement (``Program.statement`` is ``None`` for declaration-only
+    programs).
     Raises ``ParseError`` on invalid syntax.
     """
     parser = _get_parser()
     try:
-        tree = parser.parse(text)
+        result = parser.parse(text)
     except UnexpectedInput as e:
         span = None
         if getattr(e, "line", None) is not None and getattr(e, "column", None) is not None:
             span = SourceSpan(e.line, e.column)
         raise ParseError(str(e), source_span=span) from e
-
-    transformer = _QryndelTransformer()
-    try:
-        result = transformer.transform(tree)
+    except ParseError:
+        raise
     except VisitError as e:
         if isinstance(e.orig_exc, ParseError):
             raise e.orig_exc from None
         raise ParseError(str(e.orig_exc)) from e
+    except RecursionError as e:
+        raise ParseError("Query is too complex to parse") from e
+    _check_depth(result)
     return result
 
 
-def parse(text: str) -> Statement:
+def parse(text: str) -> Statement | None:
     """Parse *text* and return its single statement.
 
     TYPE and RULE declarations are discarded; use ``parse_program`` to keep

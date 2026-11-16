@@ -306,5 +306,16 @@ def test_shipped_examples_compile(example):
     from setup_db import DB_PATH
 
     query = example.read_text(encoding="utf-8")
-    params = {"minimum": 18} if "$minimum" in query else None
-    Client(str(DB_PATH)).compile(query, params=params)
+    # explain() compiles without needing parameter values.
+    Client(str(DB_PATH)).explain(query)
+
+
+FIXTURE_EXAMPLES = [path for path in EXAMPLES if "stock_drift" not in path.name]
+
+
+@pytest.mark.parametrize("example", FIXTURE_EXAMPLES, ids=lambda path: path.name)
+def test_shipped_examples_pass_the_fixture_schema_check(example):
+    """Every example except the inventory-style one matches setup_db.py's tables."""
+    from setup_db import DB_PATH
+
+    Client(str(DB_PATH), schema="auto").explain(example.read_text(encoding="utf-8"))

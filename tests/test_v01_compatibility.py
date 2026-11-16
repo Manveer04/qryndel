@@ -34,7 +34,7 @@ def run(db, query, params=None):
 
 
 def test_version_and_only_public_backend():
-    assert __version__ == "0.2.0"
+    assert __version__ == "0.3.0"
     capabilities = get_backend("sqlite").capabilities
     assert capabilities.backend == "sqlite"
     assert capabilities.select and capabilities.writes and capabilities.parameter_binding
@@ -158,4 +158,4 @@ def test_cli_operation(tmp_path):
 
 def test_cli_version():
     completed = subprocess.run([sys.executable, "-m", "qryndel.cli", "--version"], check=True, capture_output=True, text=True)
-    assert completed.stdout.strip() == "0.2.0"
+    assert completed.stdout.strip() == "0.3.0"

@@ -11,6 +11,8 @@ from typing import Any, Sequence
 from qryndel import __version__
 from qryndel.errors import UdlError
 from qryndel.explain import format_explain
+from qryndel.schema import describe_schema
+from qryndel.schema_drift import format_schema_drift
 from qryndel.sdk import Client, QueryResult
 
 
@@ -43,6 +45,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-affected-rows", type=int, metavar="N", help="roll back a write that affects more than N rows")
     parser.add_argument("--timeout-ms", type=int, metavar="MS", help="abort a statement running longer than MS")
     parser.add_argument("--json", action="store_true", help="print results as JSON")
+    parser.add_argument(
+        "--no-schema-check", action="store_true",
+        help="skip checking tables and columns against the database before running",
+    )
+    parser.add_argument("--show-schema", action="store_true", help="print the database's tables and columns and exit")
+    parser.add_argument(
+        "--check-schema", metavar="PROGRAM",
+        help="compare the TYPE declarations in PROGRAM (file or text) with the database; exit 1 on drift",
+    )
     return parser
 
 
@@ -79,16 +90,57 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.version:
         print(__version__)
         return
-    if not args.query:
+    if not args.query and not args.show_schema and not args.check_schema:
         parser.print_usage(sys.stderr)
         raise SystemExit(1)
     if args.explain and args.preview:
         parser.error("--explain and --preview cannot be combined")
 
+    try:
+        client = Client(
+            args.db,
+            read_only=args.read_only,
+            schema=None if args.no_schema_check else "auto",
+        )
+    except UdlError as exc:
+        print(f"error[{exc.code}]: {exc.message}", file=sys.stderr)
+        raise SystemExit(1) from None
+
+    if args.show_schema:
+        described = describe_schema(client.schema or {})
+        if args.json:
+            print(json.dumps(described))
+        else:
+            for table, columns in described.items():
+                print(f"{table}: " + ", ".join(f"{name} {kind}" for name, kind in columns.items()))
+        return
+
+    if args.check_schema:
+        program_source = Path(args.check_schema)
+        program = (
+            program_source.read_text(encoding="utf-8") if program_source.is_file() else args.check_schema
+        )
+        try:
+            reports = client.check_schema(program)
+        except UdlError as exc:
+            print(f"error[{exc.code}]: {exc.message}", file=sys.stderr)
+            raise SystemExit(1) from None
+        if not reports:
+            print("error: no TYPE declarations found", file=sys.stderr)
+            raise SystemExit(1)
+        if args.json:
+            print(json.dumps([
+                {"source": r.source, "clean": r.clean,
+                 "changes": [vars(change) for change in r.changes]}
+                for r in reports
+            ]))
+        else:
+            print("\n\n".join(format_schema_drift(report) for report in reports))
+        raise SystemExit(0 if all(report.clean for report in reports) else 1)
+
     source = Path(args.query)
     query = source.read_text(encoding="utf-8") if source.is_file() else args.query
     params = dict(args.param)
-    client = Client(args.db, read_only=args.read_only)
     budget = {
         key: value
         for key, value in {

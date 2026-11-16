@@ -1,0 +1,5 @@
+-- Line totals with arithmetic and a named result column
+FROM orders
+WHERE quantity * amount > 50
+RETURN product, quantity, amount, quantity * amount AS line_total
+ORDER BY line_total DESC

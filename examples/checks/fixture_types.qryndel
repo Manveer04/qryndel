@@ -1,0 +1,18 @@
+-- Declarations for the setup_db.py fixture. Check them with:
+--   udl --check-schema examples/checks/fixture_types.qryndel
+TYPE users {
+  id: ID required
+  name: Text required
+  age: Number required
+  email: Text required
+  city: Text required
+  ALLOW extra fields
+}
+
+TYPE orders {
+  id: ID required
+  user_id: Number required
+  product: Text required
+  amount: Number required
+  quantity: Number required
+}

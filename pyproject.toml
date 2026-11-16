@@ -4,19 +4,29 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qryndel"
-version = "0.2.0"
-description = "An experimental SQLite implementation of Unified Data Language"
+version = "0.3.0"
+description = "A safe, schema-checked query language for SQLite: bound parameters, write guards, budgets and guardrails for AI agents"
 license = "MIT"
 authors = [{name = "Manveer Singh"}]
-keywords = ["query-language", "sqlite", "udl", "sql", "safe-sql"]
+keywords = [
+    "sqlite", "sql", "query-language", "dsl", "udl", "safe-sql", "sql-injection",
+    "query-builder", "query-validation", "schema-validation", "data-contracts",
+    "llm", "ai-agents", "guardrails", "database",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Database",
+    "Topic :: Database :: Front-Ends",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,6 +41,8 @@ test = ["pytest>=7.0"]
 Homepage = "https://github.com/Manveer04/qryndel"
 Repository = "https://github.com/Manveer04/qryndel"
 Issues = "https://github.com/Manveer04/qryndel/issues"
+Documentation = "https://github.com/Manveer04/qryndel/blob/main/docs/language-reference.md"
+Changelog = "https://github.com/Manveer04/qryndel/blob/main/CHANGELOG.md"
 
 [project.scripts]
 udl = "qryndel.cli:main"

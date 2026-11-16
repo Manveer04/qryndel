@@ -26,6 +26,7 @@ from qryndel.ast_nodes import (
     WhereExpr,
 )
 from qryndel.errors import UdlError
+from qryndel.expressions import map_fields
 
 
 class SemanticError(UdlError):
@@ -66,9 +67,9 @@ def _substitute_parameter(expr: WhereExpr, param: str, arg: FieldPath) -> WhereE
     def walk(node: WhereExpr) -> WhereExpr:
         if isinstance(node, Condition):
             return Condition(
-                field=_replace_prefix(node.field),
+                field=map_fields(node.field, _replace_prefix),
                 operator=node.operator,
-                value=node.value,
+                value=map_fields(node.value, _replace_prefix),
             )
 
         if isinstance(node, NullPredicate):

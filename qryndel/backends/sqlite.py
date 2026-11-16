@@ -57,9 +57,14 @@ def _safe_identifier(value: str) -> str:
     return value
 
 
+from qryndel.expressions import result_name
 from qryndel.ast_nodes import (
     AndCondition,
     AggregateField,
+    BinaryOp,
+    Convert,
+    Negate,
+    ProjectionItem,
     Condition,
     FieldPath,
     JoinCondition,
@@ -96,6 +101,8 @@ class SqliteBackend(BackendCompiler):
         native_execution=True,
         # NULLS FIRST / NULLS LAST were added in SQLite 3.30.0.
         null_ordering=_SQLITE_VERSION >= (3, 30, 0),
+        computed_expressions=True,
+        column_comparison=True,
     )
 
     def compile(
@@ -183,7 +190,12 @@ class SqliteBackend(BackendCompiler):
         from_sql = _compile_from_clause(node, known_tables)
 
         distinct_sql = "DISTINCT " if distinct else ""
-        columns_sql = ", ".join(_compile_projection(f, known_tables) for f in columns)
+        columns_sql = ", ".join(
+            _compile_projection(f, known_tables, params, parameters) for f in columns
+        )
+        result_aliases = frozenset(
+            item.alias for item in columns if isinstance(item, ProjectionItem) and item.alias
+        )
 
         parts = [f"SELECT {distinct_sql}{columns_sql}", f"FROM {from_sql}"]
 
@@ -211,10 +223,8 @@ class SqliteBackend(BackendCompiler):
             for of in order_fields:
                 dir_sql = f" {of.direction}" if of.direction else ""
                 nulls_sql = f" NULLS {of.nulls}" if of.nulls else ""
-                order_expr = (
-                    _compile_projection(of.field, known_tables)
-                    if isinstance(of.field, AggregateField)
-                    else _compile_field_expr(of.field, known_tables)
+                order_expr = _compile_value(
+                    of.field, known_tables, params, parameters, result_aliases
                 )
                 order_parts.append(f"{order_expr}{dir_sql}{nulls_sql}")
             parts.append(f"ORDER BY {', '.join(order_parts)}")
@@ -281,6 +291,8 @@ def _compile_field_expr(field: FieldPath, known_tables: set[str] = frozenset()) 
     """Render a FieldPath as a SQL column expression (no AS alias)."""
     column, json_parts = _split_field(field, known_tables)
     if not json_parts:
+        if field.cast:
+            return f"CAST({column} AS {field.cast})"
         return column
     return f"json_extract({column}, '$.{'.'.join(json_parts)}')"
 
@@ -293,12 +305,63 @@ def _compile_field_proj(field: FieldPath, known_tables: set[str] = frozenset()) 
     return f'{expression} AS "{_field_dotted(field)}"'
 
 
-def _compile_projection(field: Any, known_tables: set[str] = frozenset()) -> str:
-    """Compile either a normal field or an aggregate projection."""
-    if isinstance(field, AggregateField):
-        argument = "*" if field.field is None else _compile_field_expr(field.field, known_tables)
-        return f"{field.function}({argument})"
-    return _compile_field_proj(field, known_tables)
+def _quote_alias(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _compile_projection(
+    item: Any,
+    known_tables: set[str] = frozenset(),
+    params: List[Any] | None = None,
+    parameters: Mapping[str, Any] | None = None,
+) -> str:
+    """Compile one RETURN item. Its result key is ``result_name(item)``."""
+    if params is None:
+        params = []
+    if isinstance(item, FieldPath):
+        return _compile_field_proj(item, known_tables)
+    expression = item.expression if isinstance(item, ProjectionItem) else item
+    sql = _compile_value(expression, known_tables, params, parameters)
+    name = result_name(item)
+    if sql == name:
+        return sql  # e.g. COUNT(*) or SUM(amount): SQLite already uses this name
+    return f"{sql} AS {_quote_alias(name)}"
+
+
+def _compile_value(
+    expr: Any,
+    known_tables: set[str] = frozenset(),
+    params: List[Any] | None = None,
+    parameters: Mapping[str, Any] | None = None,
+    result_aliases: frozenset = frozenset(),
+) -> str:
+    """Compile a value expression. Literals and parameters become ``?``.
+
+    ``/`` always divides as real numbers (``7 / 2`` is ``3.5``), unlike
+    SQLite's integer division, so results do not depend on column types.
+    """
+    if params is None:
+        params = []
+    if isinstance(expr, FieldPath):
+        if len(expr.parts) == 1 and expr.qualifier is None and expr.parts[0] in result_aliases:
+            return _quote_alias(expr.parts[0])
+        return _compile_field_expr(expr, known_tables)
+    if isinstance(expr, AggregateField):
+        argument = "*" if expr.field is None else _compile_value(expr.field, known_tables, params, parameters)
+        return f"{expr.function}({argument})"
+    if isinstance(expr, BinaryOp):
+        left = _compile_value(expr.left, known_tables, params, parameters, result_aliases)
+        right = _compile_value(expr.right, known_tables, params, parameters, result_aliases)
+        if expr.op == "/":
+            return f"({left} * 1.0 / {right})"
+        return f"({left} {expr.op} {right})"
+    if isinstance(expr, Negate):
+        return f"(-{_compile_value(expr.operand, known_tables, params, parameters, result_aliases)})"
+    if isinstance(expr, Convert):
+        inner = _compile_value(expr.operand, known_tables, params, parameters, result_aliases)
+        return f"CAST({inner} AS {'NUMERIC' if expr.target == 'NUMBER' else 'TEXT'})"
+    params.append(_resolve_parameter(expr, parameters))
+    return "?"
 
 
 # ---------------------------------------------------------------------------
@@ -319,12 +382,15 @@ def _compile_where_expr_params(
         params = []
 
     if isinstance(expr, Condition):
-        field_sql = _compile_condition_field(expr.field, known_tables)
+        field_sql = _compile_value(expr.field, known_tables, params, parameters)
         if expr.value is None and expr.operator in {"=", "!="}:
             # A literal NULL comparison is a null check (`= NULL` -> IS NULL).
+            # A *parameter* that is None deliberately keeps SQL semantics and
+            # matches nothing: `WHERE owner_id = $user` with user=None must not
+            # suddenly match every row that has no owner.
             return f"{field_sql} IS {'NOT ' if expr.operator == '!=' else ''}NULL"
-        params.append(_resolve_parameter(expr.value, parameters))
-        return f"{field_sql} {expr.operator} ?"
+        value_sql = _compile_value(expr.value, known_tables, params, parameters)
+        return f"{field_sql} {expr.operator} {value_sql}"
 
     if isinstance(expr, NullPredicate):
         return _compile_null_predicate(expr, known_tables)
@@ -351,14 +417,12 @@ def _resolve_parameter(value: Any, parameters: Mapping[str, Any] | None) -> Any:
         return value
     if parameters is None or value.name not in parameters:
         raise ParameterError(f"missing parameter: ${value.name}")
-    return parameters[value.name]
-
-
-def _compile_condition_field(field: Any, known_tables: set[str] = frozenset()) -> str:
-    if isinstance(field, AggregateField):
-        argument = "*" if field.field is None else _compile_field_expr(field.field, known_tables)
-        return f"{field.function}({argument})"
-    return _compile_field_expr(field, known_tables)
+    resolved = parameters[value.name]
+    if isinstance(resolved, int) and not isinstance(resolved, bool) and not (-(2**63) <= resolved < 2**63):
+        raise ParameterError(
+            f"parameter ${value.name} is too large for SQLite (integers must fit in 64 bits)"
+        )
+    return resolved
 
 
 def _compile_null_predicate(
@@ -469,8 +533,8 @@ def _compile_update_params(
         if plan.alias and col_parts and col_parts[0] == plan.alias:
             col_parts = col_parts[1:]
         col = ".".join(_safe_identifier(part) for part in col_parts)
-        set_parts.append(f"{col} = ?")
-        params.append(_resolve_parameter(assign.value, parameters))
+        known = {plan.table, *([plan.alias] if plan.alias else [])}
+        set_parts.append(f"{col} = {_compile_value(assign.value, known, params, parameters)}")
     set_sql = ", ".join(set_parts)
     alias_sql = f" AS {_safe_identifier(plan.alias)}" if plan.alias else ""
     sql = f"UPDATE {_safe_identifier(plan.table)}{alias_sql}\nSET {set_sql}"
