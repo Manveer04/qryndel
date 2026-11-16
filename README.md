@@ -3,6 +3,7 @@
 [![Tests](https://github.com/Manveer04/qryndel/actions/workflows/tests.yml/badge.svg)](https://github.com/Manveer04/qryndel/actions/workflows/tests.yml)
 [![Python 3.10–3.13](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/qryndel)](https://pypi.org/project/qryndel/)
 [![Release](https://img.shields.io/github/v/release/Manveer04/qryndel?include_prereleases)](https://github.com/Manveer04/qryndel/releases)
 
 **A safe query language for SQLite.** Qryndel checks every query before it
@@ -74,13 +75,17 @@ are never concatenated into SQL text.
 
 ## Installation
 
-Qryndel is distributed from the source repository. From a checkout:
+```bash
+pip install qryndel
+```
+
+This installs the Python library and the `udl` command. To run the examples
+and tests, or to work on Qryndel itself, install from a checkout instead:
 
 ```bash
-python -m venv .venv
-# Activate .venv using the command for your shell.
-python -m pip install --upgrade pip
-python -m pip install .
+git clone https://github.com/Manveer04/qryndel.git
+cd qryndel
+python -m pip install -e ".[test]"
 ```
 
 Python 3.10 or newer is required. `RIGHT JOIN` and `FULL JOIN` need SQLite
@@ -90,7 +95,8 @@ the query.
 
 ## Getting Started
 
-Create the example database and run a query through the CLI:
+From a checkout, create the example database (`setup_db.py` is in the
+repository, not the PyPI package) and run a query through the CLI:
 
 ```bash
 python setup_db.py

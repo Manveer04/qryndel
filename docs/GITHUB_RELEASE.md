@@ -52,6 +52,6 @@ database (see `docs/real-world-testing.md`).
 Everything else written for v0.1.0 and v0.2.0 keeps working. See
 `CHANGELOG.md` for the full list.
 
-Install from a source checkout with `python -m pip install .`. Python 3.10+
+Install with `pip install qryndel` (or `python -m pip install .` from a checkout). Python 3.10+
 and SQLite are required. PostgreSQL, MongoDB, Neo4j and graph queries are not
 part of this release.
